@@ -689,86 +689,102 @@ struct ProfileView: View {
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 32) {
-                // Profile Header
-                if let user = supabase.currentUser {
-                    VStack(spacing: 20) {
-                        Text(user.profileIcon ?? "👤")
-                            .font(.system(size: 100))
-                            .frame(width: 140, height: 140)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Compact Profile Header
+                    if let user = supabase.currentUser {
+                        VStack(spacing: 16) {
+                            HStack(spacing: 16) {
+                                Text(user.profileIcon ?? "👤")
+                                    .font(.system(size: 50))
+                                    .frame(width: 70, height: 70)
+                                    .background(
+                                        Circle()
+                                            .fill(AppConfig.lightPink)
+                                    )
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(user.nickname)
+                                        .font(.title3)
+                                        .fontWeight(.bold)
+                                    
+                                    Text("포스테키안 룰렛 멤버")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    
+                                    // 로그아웃 버튼을 헤더에 작게 추가
+                                    Button {
+                                        showingSignOutAlert = true
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "arrow.right.square")
+                                                .font(.caption2)
+                                            Text("로그아웃")
+                                                .font(.caption2)
+                                        }
+                                        .foregroundColor(.red)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.red.opacity(0.1))
+                                        .cornerRadius(6)
+                                    }
+                                    .padding(.top, 4)
+                                }
+                                
+                                Spacer()
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 16)
                             .background(
-                                Circle()
-                                    .fill(AppConfig.lightPink)
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(.systemBackground))
+                                    .shadow(color: AppConfig.primaryColor.opacity(0.1), radius: 8, x: 0, y: 4)
                             )
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                    }
+                    
+                    // Current Meeting Section
+                    currentMeetingSection
+                    
+                    // Menu Items
+                    VStack(spacing: 12) {
+                        ProfileMenuItem(
+                            icon: "heart.fill",
+                            title: "내 선호도",
+                            subtitle: "음식점별 선호도 관리",
+                            color: AppConfig.primaryColor
+                        ) {
+                            showingPreferences = true
+                        }
                         
-                        VStack(spacing: 8) {
-                            Text(user.nickname)
-                                .font(.title2)
-                                .fontWeight(.bold)
-                            
-                            Text("포스테키안 룰렛 멤버")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                        ProfileMenuItem(
+                            icon: "clock.fill",
+                            title: "참여 기록",
+                            subtitle: "지난 모임 참여 내역",
+                            color: AppConfig.primaryColor
+                        ) {
+                            showingHistory = true
+                        }
+                        
+                        ProfileMenuItem(
+                            icon: "gearshape.fill",
+                            title: "설정",
+                            subtitle: "앱 설정 및 알림",
+                            color: AppConfig.primaryColor
+                        ) {
+                            // TODO: Navigate to settings
                         }
                     }
-                    .padding(.top, 40)
-                }
-                
-                // Current Meeting Section
-                currentMeetingSection
-                
-                // Menu Items
-                VStack(spacing: 16) {
-                    ProfileMenuItem(
-                        icon: "heart.fill",
-                        title: "내 선호도",
-                        subtitle: "음식점별 선호도 관리",
-                        color: AppConfig.primaryColor
-                    ) {
-                        showingPreferences = true
-                    }
+                    .padding(.horizontal, 20)
                     
-                    ProfileMenuItem(
-                        icon: "clock.fill",
-                        title: "참여 기록",
-                        subtitle: "지난 모임 참여 내역",
-                        color: AppConfig.primaryColor
-                    ) {
-                        showingHistory = true
-                    }
-                    
-                    ProfileMenuItem(
-                        icon: "gearshape.fill",
-                        title: "설정",
-                        subtitle: "앱 설정 및 알림",
-                        color: AppConfig.primaryColor
-                    ) {
-                        // TODO: Navigate to settings
-                    }
+                    // 하단 여백 추가 (탭바와 겹치지 않도록)
+                    Color.clear.frame(height: 100)
                 }
-                .padding(.horizontal, 20)
-                
-                Spacer()
-                
-                // Sign Out Button
-                Button {
-                    showingSignOutAlert = true
-                } label: {
-                    HStack {
-                        Image(systemName: "arrow.right.square")
-                        Text("로그아웃")
-                    }
-                    .fontWeight(.medium)
-                    .foregroundColor(.red)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 40)
             }
             .navigationTitle("프로필")
+            .navigationBarTitleDisplayMode(.large)
             .background(Color(.systemGroupedBackground))
         }
         .alert("로그아웃", isPresented: $showingSignOutAlert) {
@@ -835,30 +851,31 @@ struct ProfileMenuItem: View {
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.title3)
                     .foregroundColor(color)
-                    .frame(width: 28)
+                    .frame(width: 24)
                 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline)
+                        .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
                     
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 
                 Spacer()
                 
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(.systemBackground))
@@ -901,84 +918,65 @@ struct CurrentMeetingCard: View {
         Button {
             showingMeetingDetail = true
         } label: {
-            HStack(spacing: 16) {
-                // Glow effect circle
+            HStack(spacing: 12) {
+                // Compact icon
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [role.color.opacity(0.8), role.color.opacity(0.3)],
-                            center: .center,
-                            startRadius: 8,
-                            endRadius: 20
-                        )
-                    )
-                    .frame(width: 40, height: 40)
+                    .fill(role.color.opacity(0.2))
+                    .frame(width: 32, height: 32)
                     .overlay(
                         Image(systemName: meeting.type == .fixed ? "checkmark.circle.fill" : "shuffle")
-                            .foregroundColor(.white)
-                            .font(.title3)
-                    )
-                    .shadow(color: role.color.opacity(0.5), radius: 8, x: 0, y: 4)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(role.displayName)
+                            .foregroundColor(role.color)
                             .font(.caption)
+                    )
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(role.displayName)
+                            .font(.caption2)
                             .fontWeight(.bold)
                             .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
                             .background(role.color)
-                            .cornerRadius(8)
+                            .cornerRadius(4)
                         
-                        Text(meeting.type.displayName)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(meeting.type == .fixed ? .green : AppConfig.primaryColor)
+                        // 모임 제목 (음식점 이름 또는 투표 모임)
+                        if meeting.type == .fixed, let restaurantName = meeting.selectedRestaurantName {
+                            Text(restaurantName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                        } else {
+                            Text("투표 모임")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                        }
                     }
                     
                     if role == .participant {
                         Text("by \(meeting.hostNickname ?? "알 수 없음")")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                     
-                    HStack {
-                        Image(systemName: "calendar")
-                            .foregroundColor(AppConfig.primaryColor)
-                            .font(.caption)
-                        Text(meeting.date.formatted(date: .abbreviated, time: .omitted))
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
+                    Text(meeting.date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
                 
                 Spacer()
                 
-                VStack(spacing: 4) {
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                    
-                    Text("자세히")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+                    .font(.caption2)
             }
-            .padding(16)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(
-                        LinearGradient(
-                            colors: [role.color.opacity(0.1), role.color.opacity(0.05)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(role.color.opacity(0.3), lineWidth: 1)
-                    )
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: role.color.opacity(0.1), radius: 4, x: 0, y: 2)
             )
         }
         .buttonStyle(PlainButtonStyle())
