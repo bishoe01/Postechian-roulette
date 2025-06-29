@@ -155,12 +155,20 @@ class SupabaseService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = method
         
+        print("DEBUG: makeRequest - URL: \(url)")
+        print("DEBUG: makeRequest - Method: \(method)")
+        print("DEBUG: makeRequest - Headers:")
+        
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
+            print("  \(key): \(value)")
         }
         
         if let body = body {
             request.httpBody = body
+            if let bodyString = String(data: body, encoding: .utf8) {
+                print("DEBUG: makeRequest - Body: \(bodyString)")
+            }
         }
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -169,20 +177,32 @@ class SupabaseService: ObservableObject {
             throw APIError.serverError
         }
         
+        print("DEBUG: makeRequest - Status Code: \(httpResponse.statusCode)")
+        
         // Handle different status codes
         switch httpResponse.statusCode {
         case 200...299:
+            print("DEBUG: makeRequest - Success")
             break // Success
         case 401:
+            print("DEBUG: makeRequest - 401 Unauthorized")
+            if let errorData = String(data: data, encoding: .utf8) {
+                print("DEBUG: makeRequest - 401 Error response: \(errorData)")
+            }
             throw APIError.notAuthenticated
         case 403:
+            print("DEBUG: makeRequest - 403 Forbidden")
+            if let errorData = String(data: data, encoding: .utf8) {
+                print("DEBUG: makeRequest - 403 Error response: \(errorData)")
+            }
             throw APIError.notAuthorized
         case 409:
+            print("DEBUG: makeRequest - 409 Conflict")
             throw APIError.alreadyParticipating
         default:
-            print("Server error: \(httpResponse.statusCode)")
+            print("DEBUG: makeRequest - Server error: \(httpResponse.statusCode)")
             if let errorData = String(data: data, encoding: .utf8) {
-                print("Error response: \(errorData)")
+                print("DEBUG: makeRequest - Error response: \(errorData)")
             }
             throw APIError.serverError
         }
@@ -199,7 +219,36 @@ class SupabaseService: ObservableObject {
         }
         
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        
+        // 커스텀 날짜 디코딩 전략
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let dateString = try container.decode(String.self)
+            
+            // Supabase 타임스탬프 형식들 시도
+            let formats = [
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'+00:00'",  // Supabase 기본 형식
+                "yyyy-MM-dd'T'HH:mm:ss.SSS'+00:00'",     // 밀리초 3자리
+                "yyyy-MM-dd'T'HH:mm:ss'+00:00'",         // 초까지만
+                "yyyy-MM-dd'T'HH:mm:ssZ",                // ISO8601
+                "yyyy-MM-dd'T'HH:mm:ss.SSSZ"             // ISO8601 밀리초
+            ]
+            
+            for format in formats {
+                formatter.dateFormat = format
+                if let date = formatter.date(from: dateString) {
+                    return date
+                }
+            }
+            
+            // 모든 형식이 실패하면 현재 시간 반환
+            print("DEBUG: Failed to parse date: \(dateString)")
+            return Date()
+        }
         
         do {
             return try decoder.decode(T.self, from: data)
@@ -300,17 +349,27 @@ class SupabaseService: ObservableObject {
     
     // MARK: - Meeting Participation
     func joinMeeting(meetingId: UUID) async throws {
+        print("DEBUG: joinMeeting - called with meetingId: \(meetingId)")
+        print("DEBUG: joinMeeting - currentUser: \(String(describing: currentUser))")
+        print("DEBUG: joinMeeting - isAuthenticated: \(isAuthenticated)")
+        
         guard let userId = currentUser?.id else {
+            print("DEBUG: joinMeeting - No currentUser, throwing notAuthenticated")
             throw APIError.notAuthenticated
         }
         
+        print("DEBUG: joinMeeting - userId: \(userId)")
+        print("DEBUG: joinMeeting - participatingMeetings count: \(participatingMeetings.count)")
+        
         // 이미 참여 중인 모임이 있는지 확인
         if !participatingMeetings.isEmpty {
+            print("DEBUG: joinMeeting - Already participating in another meeting")
             throw APIError.alreadyParticipating
         }
         
         // 이미 이 모임에 참여 중인지 확인
         if participatingMeetings.contains(where: { $0.id == meetingId }) {
+            print("DEBUG: joinMeeting - Already participating in this meeting")
             throw APIError.alreadyParticipating
         }
         
@@ -319,21 +378,65 @@ class SupabaseService: ObservableObject {
             "user_id": userId.uuidString
         ]
         
-        let data = try JSONSerialization.data(withJSONObject: participant)
-        let _: String = try await makeRequest(
-            endpoint: "meeting_participants",
-            method: "POST",
-            body: data
-        )
+        print("DEBUG: joinMeeting - participant data: \(participant)")
         
-        // 로컬 상태 업데이트 (실제로는 서버에서 모임 정보를 다시 가져와야 함)
-        await loadUserMeetings()
+        if useMockData {
+            // Mock implementation
+            print("DEBUG: joinMeeting - Using mock mode")
+            try await Task.sleep(nanoseconds: 500_000_000)
+            
+            // Mock 참여 성공
+            await MainActor.run {
+                // 임시로 Mock 모임을 participatingMeetings에 추가
+                let mockMeeting = Meeting(
+                    id: meetingId,
+                    hostId: UUID(),
+                    hostNickname: "다른 호스트",
+                    dateString: "2025-06-29",
+                    timeString: "18:00:00",
+                    week: 27,
+                    type: .fixed,
+                    status: .recruiting,
+                    selectedRestaurantId: UUID(),
+                    selectedRestaurantName: "맘스터치",
+                    rouletteResult: nil,
+                    rouletteSpunAt: nil,
+                    rouletteSpunBy: nil,
+                    createdAt: Date(),
+                    participantCount: 2,
+                    voteCount: 0
+                )
+                participatingMeetings.append(mockMeeting)
+            }
+            print("DEBUG: joinMeeting - Mock participation successful")
+        } else {
+            let data = try JSONSerialization.data(withJSONObject: participant)
+            
+            do {
+                let _: EmptyResponse = try await makeRequest(
+                    endpoint: "meeting_participants",
+                    method: "POST",
+                    body: data
+                )
+                print("DEBUG: joinMeeting - API call successful")
+            } catch {
+                print("DEBUG: joinMeeting - API call failed: \(error)")
+                throw error
+            }
+            
+            // 로컬 상태 업데이트 (실제로는 서버에서 모임 정보를 다시 가져와야 함)
+            await loadUserMeetings()
+            print("DEBUG: joinMeeting - loadUserMeetings completed")
+        }
     }
     
     func leaveMeeting(meetingId: UUID) async throws {
         guard let userId = currentUser?.id else {
+            print("DEBUG: leaveMeeting - No currentUser, throwing notAuthenticated")
             throw APIError.notAuthenticated
         }
+        
+        print("DEBUG: leaveMeeting - meetingId: \(meetingId), userId: \(userId)")
         
         if useMockData {
             // Mock implementation
@@ -344,14 +447,23 @@ class SupabaseService: ObservableObject {
             }
         } else {
             let deleteEndpoint = "meeting_participants?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
-            let _: String = try await makeRequest(
-                endpoint: deleteEndpoint,
-                method: "DELETE"
-            )
+            print("DEBUG: leaveMeeting - deleteEndpoint: \(deleteEndpoint)")
+            
+            do {
+                let _: EmptyResponse = try await makeRequest(
+                    endpoint: deleteEndpoint,
+                    method: "DELETE"
+                )
+                print("DEBUG: leaveMeeting - API call successful")
+            } catch {
+                print("DEBUG: leaveMeeting - API call failed: \(error)")
+                throw error
+            }
             
             // 로컬 상태 업데이트
             await MainActor.run {
                 participatingMeetings.removeAll { $0.id == meetingId }
+                print("DEBUG: leaveMeeting - Updated local state")
             }
         }
     }
@@ -460,33 +572,99 @@ class SupabaseService: ObservableObject {
             }
         } else {
             do {
+                print("DEBUG: loadUserMeetings - Loading for user: \(userId)")
+                
                 // 참여 중인 모임 ID들 가져오기
                 struct ParticipantRecord: Codable {
                     let meeting_id: UUID
-                    let user_id: UUID
                 }
                 
                 let participantEndpoint = "meeting_participants?user_id=eq.\(userId.uuidString)&select=meeting_id"
                 let participantRecords: [ParticipantRecord] = try await makeRequest(endpoint: participantEndpoint)
                 
-                // 참여 중인 모임들의 상세 정보 가져오기 (기본 필드만 선택)
+                print("DEBUG: loadUserMeetings - Found \(participantRecords.count) participant records")
+                
+                // 참여 중인 모임들의 상세 정보 가져오기
                 var participatingMeetingsData: [Meeting] = []
                 if !participantRecords.isEmpty {
                     let meetingIds = participantRecords.map { $0.meeting_id.uuidString }.joined(separator: ",")
-                    let participatingEndpoint = "meetings?id=in.(\(meetingIds))&select=id,host_id,date,time,week,type,status,selected_restaurant_id,roulette_result,roulette_spun_at,roulette_spun_by,created_at"
+                    let participatingEndpoint = "meetings?id=in.(\(meetingIds))&select=*"
                     participatingMeetingsData = try await makeRequest(endpoint: participatingEndpoint)
+                    
+                    // 참여 중인 모임들의 호스트 닉네임과 음식점 이름 로드
+                    for i in 0..<participatingMeetingsData.count {
+                        // 호스트 닉네임 가져오기
+                        let userEndpoint = "users?id=eq.\(participatingMeetingsData[i].hostId.uuidString)&select=nickname"
+                        do {
+                            struct UserNickname: Codable {
+                                let nickname: String
+                            }
+                            let users: [UserNickname] = try await makeRequest(endpoint: userEndpoint)
+                            if let hostNickname = users.first?.nickname {
+                                participatingMeetingsData[i].hostNickname = hostNickname
+                            }
+                        } catch {
+                            participatingMeetingsData[i].hostNickname = "알 수 없음"
+                        }
+                        
+                        // 선택된 음식점 이름 가져오기 (fixed 타입일 경우)
+                        if let restaurantId = participatingMeetingsData[i].selectedRestaurantId {
+                            let restaurantEndpoint = "restaurants?id=eq.\(restaurantId.uuidString)&select=name"
+                            do {
+                                struct RestaurantName: Codable {
+                                    let name: String
+                                }
+                                let restaurants: [RestaurantName] = try await makeRequest(endpoint: restaurantEndpoint)
+                                if let restaurantName = restaurants.first?.name {
+                                    participatingMeetingsData[i].selectedRestaurantName = restaurantName
+                                }
+                            } catch {
+                                participatingMeetingsData[i].selectedRestaurantName = "음식점 정보 없음"
+                            }
+                        }
+                    }
+                    
+                    print("DEBUG: loadUserMeetings - Loaded \(participatingMeetingsData.count) participating meetings")
+                    for meeting in participatingMeetingsData {
+                        print("  - Participating in meeting: \(meeting.id)")
+                    }
                 }
                 
-                // 호스팅 중인 모임 가져오기 (기본 필드만 선택)
-                let hostEndpoint = "meetings?host_id=eq.\(userId.uuidString)&status=eq.recruiting&select=id,host_id,date,time,week,type,status,selected_restaurant_id,roulette_result,roulette_spun_at,roulette_spun_by,created_at"
-                let hostedData: [Meeting] = try await makeRequest(endpoint: hostEndpoint)
+                // 호스팅 중인 모임 가져오기
+                let hostEndpoint = "meetings?host_id=eq.\(userId.uuidString)&status=eq.recruiting&select=*"
+                var hostedData: [Meeting] = try await makeRequest(endpoint: hostEndpoint)
+                
+                // 호스팅 중인 모임들의 호스트 닉네임(본인)과 음식점 이름 로드
+                for i in 0..<hostedData.count {
+                    // 호스트 닉네임 (본인)
+                    hostedData[i].hostNickname = currentUser?.nickname ?? "알 수 없음"
+                    
+                    // 선택된 음식점 이름 가져오기 (fixed 타입일 경우)
+                    if let restaurantId = hostedData[i].selectedRestaurantId {
+                        let restaurantEndpoint = "restaurants?id=eq.\(restaurantId.uuidString)&select=name"
+                        do {
+                            struct RestaurantName: Codable {
+                                let name: String
+                            }
+                            let restaurants: [RestaurantName] = try await makeRequest(endpoint: restaurantEndpoint)
+                            if let restaurantName = restaurants.first?.name {
+                                hostedData[i].selectedRestaurantName = restaurantName
+                            }
+                        } catch {
+                            hostedData[i].selectedRestaurantName = "음식점 정보 없음"
+                        }
+                    }
+                }
+                
+                print("DEBUG: loadUserMeetings - Loaded \(hostedData.count) hosted meetings")
                 
                 await MainActor.run {
                     self.participatingMeetings = participatingMeetingsData
                     self.hostedMeetings = hostedData
+                    print("DEBUG: loadUserMeetings - Updated local state")
                 }
             } catch {
-                print("Failed to load user meetings: \(error)")
+                print("DEBUG: loadUserMeetings - Failed to load user meetings: \(error)")
             }
         }
     }

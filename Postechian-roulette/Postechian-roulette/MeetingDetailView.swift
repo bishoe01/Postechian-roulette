@@ -1,5 +1,13 @@
 import SwiftUI
 
+struct MeetingParticipant: Identifiable {
+    let id: UUID
+    let userId: UUID
+    let nickname: String
+    let profileIcon: String?
+    let isHost: Bool
+}
+
 struct MeetingDetailView: View {
     let meeting: Meeting
     @Environment(\.dismiss) private var dismiss
@@ -14,6 +22,7 @@ struct MeetingDetailView: View {
     @State private var candidates: [Restaurant] = []
     @State private var selectedVote: UUID?
     @State private var showHostOptions = false
+    @State private var participants: [MeetingParticipant] = []
     
     var isHost: Bool {
         supabase.currentUser?.id == meeting.hostId
@@ -47,10 +56,10 @@ struct MeetingDetailView: View {
                 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
-                        .foregroundColor(.red)
+                        .foregroundColor(errorMessage == "참여 완료!" ? .green : .red)
                         .font(.caption)
                         .padding()
-                        .background(Color.red.opacity(0.1))
+                        .background((errorMessage == "참여 완료!" ? Color.green : Color.red).opacity(0.1))
                         .cornerRadius(8)
                 }
             }
@@ -69,6 +78,7 @@ struct MeetingDetailView: View {
         }
         .task {
             await loadParticipationStatus()
+            await loadParticipants()
             if meeting.type == .roulette {
                 await loadCandidates()
             }
@@ -94,25 +104,47 @@ struct MeetingDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 8) {
+                    // 모임 타입과 상태
                     HStack(spacing: 8) {
                         Image(systemName: meeting.type == .fixed ? "checkmark.circle.fill" : "shuffle")
                             .foregroundColor(meeting.type == .fixed ? .green : AppConfig.primaryColor)
-                            .font(.title2)
+                            .font(.title3)
                         
                         Text(meeting.type.displayName)
-                            .font(.headline)
-                            .fontWeight(.bold)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
                             .foregroundColor(meeting.type == .fixed ? .green : AppConfig.primaryColor)
+                        
+                        Spacer()
+                        
+                        StatusBadge(status: meeting.status)
                     }
                     
-                    Text("by \(meeting.hostNickname ?? "알 수 없음")")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    // 메인 제목 (음식점 이름 또는 투표 모임)
+                    if meeting.type == .fixed, let restaurantName = meeting.selectedRestaurantName {
+                        Text(restaurantName)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                    } else {
+                        Text("투표로 결정하는 모임")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                    }
+                    
+                    // 호스트 정보
+                    HStack(spacing: 8) {
+                        Text("👤")
+                            .font(.title3)
+                        
+                        Text("호스트: \(meeting.hostNickname ?? "알 수 없음")")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 Spacer()
-                
-                StatusBadge(status: meeting.status)
             }
         }
         .padding(20)
@@ -264,34 +296,40 @@ struct MeetingDetailView: View {
     
     private var participantsCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("참여자 (\(meeting.participantCount ?? 0)명)")
+            Text("참여자 (\(participants.count)명)")
                 .font(.headline)
                 .fontWeight(.bold)
             
-            // Mock participants
-            LazyVStack(spacing: 8) {
-                ForEach(0..<(meeting.participantCount ?? 0), id: \.self) { index in
-                    HStack {
-                        Text(AppConfig.profileIcons.randomElement() ?? "👤")
-                            .font(.title2)
-                        
-                        Text("참여자 \(index + 1)")
-                            .font(.subheadline)
-                        
-                        Spacer()
-                        
-                        if index == 0 {
-                            Text("HOST")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(AppConfig.primaryColor)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(AppConfig.lightPink)
-                                .cornerRadius(8)
+            if participants.isEmpty {
+                Text("참여자가 없습니다")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(participants) { participant in
+                        HStack {
+                            Text(participant.profileIcon ?? "👤")
+                                .font(.title2)
+                            
+                            Text(participant.nickname)
+                                .font(.subheadline)
+                            
+                            Spacer()
+                            
+                            if participant.isHost {
+                                Text("HOST")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(AppConfig.primaryColor)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(AppConfig.lightPink)
+                                    .cornerRadius(8)
+                            }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
                 }
             }
         }
@@ -350,8 +388,14 @@ struct MeetingDetailView: View {
                     leaveMeeting()
                 } label: {
                     HStack {
-                        Image(systemName: "person.badge.minus")
-                        Text("참여 취소")
+                        if isLoading {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .tint(.red)
+                        } else {
+                            Image(systemName: "person.badge.minus")
+                            Text("참여 취소")
+                        }
                     }
                     .fontWeight(.semibold)
                     .foregroundColor(.red)
@@ -360,6 +404,7 @@ struct MeetingDetailView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(12)
                 }
+                .disabled(isLoading)
             }
         }
     }
@@ -368,6 +413,75 @@ struct MeetingDetailView: View {
         await supabase.loadUserMeetings()
         await MainActor.run {
             isParticipating = supabase.isParticipating(in: meeting)
+            print("DEBUG: loadParticipationStatus - isParticipating: \(isParticipating)")
+            print("DEBUG: loadParticipationStatus - participatingMeetings count: \(supabase.participatingMeetings.count)")
+        }
+    }
+    
+    private func loadParticipants() async {
+        do {
+            // 참여자 ID 목록 가져오기
+            struct ParticipantRecord: Codable {
+                let user_id: UUID
+            }
+            
+            let participantEndpoint = "meeting_participants?meeting_id=eq.\(meeting.id.uuidString)&select=user_id"
+            let participantRecords: [ParticipantRecord] = try await supabase.makePublicRequest(endpoint: participantEndpoint)
+            
+            var allParticipants: [MeetingParticipant] = []
+            
+            // 호스트를 먼저 추가
+            let hostEndpoint = "users?id=eq.\(meeting.hostId.uuidString)&select=id,nickname,profile_icon"
+            struct UserInfo: Codable {
+                let id: UUID
+                let nickname: String
+                let profile_icon: String?
+            }
+            let hostInfo: [UserInfo] = try await supabase.makePublicRequest(endpoint: hostEndpoint)
+            
+            if let host = hostInfo.first {
+                let hostParticipant = MeetingParticipant(
+                    id: host.id,
+                    userId: host.id,
+                    nickname: host.nickname,
+                    profileIcon: host.profile_icon,
+                    isHost: true
+                )
+                allParticipants.append(hostParticipant)
+            }
+            
+            // 다른 참여자들 추가
+            for record in participantRecords {
+                // 호스트가 아닌 참여자만 추가
+                if record.user_id != meeting.hostId {
+                    let userEndpoint = "users?id=eq.\(record.user_id.uuidString)&select=id,nickname,profile_icon"
+                    let userInfo: [UserInfo] = try await supabase.makePublicRequest(endpoint: userEndpoint)
+                    
+                    if let user = userInfo.first {
+                        let participant = MeetingParticipant(
+                            id: user.id,
+                            userId: user.id,
+                            nickname: user.nickname,
+                            profileIcon: user.profile_icon,
+                            isHost: false
+                        )
+                        allParticipants.append(participant)
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                self.participants = allParticipants
+                print("DEBUG: loadParticipants - Loaded \(allParticipants.count) participants")
+                for participant in allParticipants {
+                    print("  - \(participant.nickname) (Host: \(participant.isHost))")
+                }
+            }
+        } catch {
+            print("DEBUG: loadParticipants - Failed to load participants: \(error)")
+            await MainActor.run {
+                self.participants = []
+            }
         }
     }
     
@@ -378,17 +492,44 @@ struct MeetingDetailView: View {
         print("DEBUG: MeetingDetail - joinMeeting called")
         print("DEBUG: MeetingDetail - supabase.currentUser = \(String(describing: supabase.currentUser))")
         print("DEBUG: MeetingDetail - supabase.isAuthenticated = \(supabase.isAuthenticated)")
+        print("DEBUG: MeetingDetail - meeting.id = \(meeting.id)")
         
         Task {
             do {
                 try await supabase.joinMeeting(meetingId: meeting.id)
+                
                 await MainActor.run {
                     isParticipating = true
                     isLoading = false
+                    errorMessage = "참여 완료!"
                 }
-            } catch {
+                
+                // 참여 후 상태 다시 로드
+                await loadParticipationStatus()
+                await loadParticipants()
+                
+                // 성공 메시지 3초 후 제거
+                try await Task.sleep(nanoseconds: 3_000_000_000)
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    errorMessage = ""
+                }
+                
+                print("DEBUG: MeetingDetail - joinMeeting successful, isParticipating = true")
+            } catch {
+                print("DEBUG: MeetingDetail - joinMeeting failed: \(error)")
+                await MainActor.run {
+                    if let apiError = error as? APIError {
+                        switch apiError {
+                        case .notAuthenticated:
+                            errorMessage = "로그인이 필요합니다"
+                        case .alreadyParticipating:
+                            errorMessage = "이미 다른 모임에 참여 중입니다"
+                        default:
+                            errorMessage = error.localizedDescription
+                        }
+                    } else {
+                        errorMessage = "모임 참여 실패: \(error.localizedDescription)"
+                    }
                     isLoading = false
                 }
             }
@@ -396,15 +537,45 @@ struct MeetingDetailView: View {
     }
     
     private func leaveMeeting() {
+        isLoading = true
+        errorMessage = ""
+        
         Task {
             do {
+                print("DEBUG: MeetingDetail - leaveMeeting called")
                 try await supabase.leaveMeeting(meetingId: meeting.id)
+                
                 await MainActor.run {
                     isParticipating = false
+                    isLoading = false
+                    errorMessage = "참여 취소 완료!"
                 }
-            } catch {
+                
+                // 참여 취소 후 상태 다시 로드
+                await loadParticipationStatus()
+                await loadParticipants()
+                
+                // 성공 메시지 2초 후 모달 닫기
+                try await Task.sleep(nanoseconds: 2_000_000_000)
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    dismiss()
+                }
+                
+                print("DEBUG: MeetingDetail - leaveMeeting successful")
+            } catch {
+                print("DEBUG: MeetingDetail - leaveMeeting failed: \(error)")
+                await MainActor.run {
+                    if let apiError = error as? APIError {
+                        switch apiError {
+                        case .notAuthenticated:
+                            errorMessage = "로그인이 필요합니다"
+                        default:
+                            errorMessage = "참여 취소 실패: \(error.localizedDescription)"
+                        }
+                    } else {
+                        errorMessage = "참여 취소 실패: \(error.localizedDescription)"
+                    }
+                    isLoading = false
                 }
             }
         }

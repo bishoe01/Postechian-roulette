@@ -334,12 +334,15 @@ struct MeetingListView: View {
             
             print("DEBUG: loadMeetings - loaded \(allMeetings.count) meetings")
             
-            // 각 모임의 호스트 닉네임과 선택된 음식점 이름을 별도로 가져오기
+            // 각 모임의 호스트 닉네임, 선택된 음식점 이름, 참여자 수를 별도로 가져오기
             for i in 0..<allMeetings.count {
                 // 호스트 닉네임 가져오기
                 let userEndpoint = "users?id=eq.\(allMeetings[i].hostId.uuidString)&select=nickname"
                 do {
-                    let users: [User] = try await supabase.makePublicRequest(endpoint: userEndpoint)
+                    struct UserNickname: Codable {
+                        let nickname: String
+                    }
+                    let users: [UserNickname] = try await supabase.makePublicRequest(endpoint: userEndpoint)
                     if let hostNickname = users.first?.nickname {
                         allMeetings[i].hostNickname = hostNickname
                     }
@@ -352,7 +355,10 @@ struct MeetingListView: View {
                 if let restaurantId = allMeetings[i].selectedRestaurantId {
                     let restaurantEndpoint = "restaurants?id=eq.\(restaurantId.uuidString)&select=name"
                     do {
-                        let restaurants: [Restaurant] = try await supabase.makePublicRequest(endpoint: restaurantEndpoint)
+                        struct RestaurantName: Codable {
+                            let name: String
+                        }
+                        let restaurants: [RestaurantName] = try await supabase.makePublicRequest(endpoint: restaurantEndpoint)
                         if let restaurantName = restaurants.first?.name {
                             allMeetings[i].selectedRestaurantName = restaurantName
                         }
@@ -360,6 +366,22 @@ struct MeetingListView: View {
                         print("DEBUG: Failed to load restaurant name for meeting \(allMeetings[i].id): \(error)")
                         allMeetings[i].selectedRestaurantName = "음식점 정보 없음"
                     }
+                }
+                
+                // 참여자 수 계산 (호스트 포함)
+                let participantEndpoint = "meeting_participants?meeting_id=eq.\(allMeetings[i].id.uuidString)&select=user_id"
+                do {
+                    struct ParticipantCount: Codable {
+                        let user_id: UUID
+                    }
+                    let participants: [ParticipantCount] = try await supabase.makePublicRequest(endpoint: participantEndpoint)
+                    // 호스트 + 참여자 수 (호스트가 meeting_participants에 없다면 +1)
+                    let hasHostInParticipants = participants.contains { $0.user_id == allMeetings[i].hostId }
+                    allMeetings[i].participantCount = participants.count + (hasHostInParticipants ? 0 : 1)
+                    print("DEBUG: Meeting \(allMeetings[i].id) has \(participants.count) DB participants + host = \(allMeetings[i].participantCount ?? 0) total")
+                } catch {
+                    print("DEBUG: Failed to load participant count for meeting \(allMeetings[i].id): \(error)")
+                    allMeetings[i].participantCount = 1 // 최소한 호스트는 있음
                 }
             }
             
@@ -463,7 +485,8 @@ struct MeetingCardView: View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
+                    // 모임 타입 태그
                     HStack(spacing: 8) {
                         Image(systemName: meeting.type == .fixed ? "checkmark.circle.fill" : "shuffle")
                             .foregroundColor(meeting.type == .fixed ? .green : AppConfig.primaryColor)
@@ -481,9 +504,27 @@ struct MeetingCardView: View {
                             .fill(meeting.type == .fixed ? Color.green.opacity(0.1) : AppConfig.lightPink)
                     )
                     
-                    Text(meeting.hostNickname ?? "알 수 없음")
-                        .font(.headline)
-                        .fontWeight(.bold)
+                    // 메인 제목 (음식점 이름 또는 투표 모임)
+                    if meeting.type == .fixed, let restaurantName = meeting.selectedRestaurantName {
+                        Text(restaurantName)
+                            .font(.headline)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                    } else {
+                        Text("투표로 결정하는 모임")
+                            .font(.headline)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                    }
+                    
+                    // 호스트 정보
+                    HStack(spacing: 4) {
+                        Text("👤")
+                            .font(.caption)
+                        Text("by \(meeting.hostNickname ?? "알 수 없음")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 Spacer()
@@ -508,16 +549,6 @@ struct MeetingCardView: View {
                         .font(.subheadline)
                 }
                 
-                if meeting.type == .fixed, let restaurantName = meeting.selectedRestaurantName {
-                    HStack {
-                        Image(systemName: "fork.knife")
-                            .foregroundColor(AppConfig.primaryColor)
-                            .font(.caption)
-                        Text(restaurantName)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                }
                 
                 HStack {
                     Image(systemName: "person.3")
@@ -755,6 +786,9 @@ struct ProfileView: View {
             MeetingHistoryView()
         }
         .task {
+            await supabase.loadUserMeetings()
+        }
+        .refreshable {
             await supabase.loadUserMeetings()
         }
     }
