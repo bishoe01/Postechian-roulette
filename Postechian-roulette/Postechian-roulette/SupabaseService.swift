@@ -8,8 +8,26 @@ class SupabaseService: ObservableObject {
     
     @Published var currentUser: User?
     @Published var isAuthenticated = false
+    @Published var participatingMeetings: [Meeting] = []
+    @Published var hostedMeetings: [Meeting] = []
     
     private init() {}
+    
+    // MARK: - Business Logic
+    var canCreateMeeting: Bool {
+        // 이미 호스팅 중인 활성 모임이 있거나, 참여 중인 모임이 있으면 새 모임 생성 불가
+        let hasActiveHostedMeeting = hostedMeetings.contains { $0.status == .recruiting }
+        let hasParticipatingMeeting = !participatingMeetings.isEmpty
+        return !hasActiveHostedMeeting && !hasParticipatingMeeting
+    }
+    
+    func isParticipating(in meeting: Meeting) -> Bool {
+        return participatingMeetings.contains { $0.id == meeting.id }
+    }
+    
+    func isHosting(_ meeting: Meeting) -> Bool {
+        return meeting.hostId == currentUser?.id
+    }
     
     // MARK: - Headers
     private var headers: [String: String] {
@@ -151,6 +169,11 @@ class SupabaseService: ObservableObject {
             throw APIError.notAuthenticated
         }
         
+        // 모임 생성 권한 확인
+        if !canCreateMeeting {
+            throw APIError.cannotCreateMeeting
+        }
+        
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         let dateString = formatter.string(from: date)
@@ -183,6 +206,16 @@ class SupabaseService: ObservableObject {
             throw APIError.notAuthenticated
         }
         
+        // 이미 참여 중인 모임이 있는지 확인
+        if !participatingMeetings.isEmpty {
+            throw APIError.alreadyParticipating
+        }
+        
+        // 이미 이 모임에 참여 중인지 확인
+        if participatingMeetings.contains(where: { $0.id == meetingId }) {
+            throw APIError.alreadyParticipating
+        }
+        
         let participant = [
             "meeting_id": meetingId.uuidString,
             "user_id": userId.uuidString
@@ -194,6 +227,65 @@ class SupabaseService: ObservableObject {
             method: "POST",
             body: data
         )
+        
+        // 로컬 상태 업데이트 (실제로는 서버에서 모임 정보를 다시 가져와야 함)
+        await loadUserMeetings()
+    }
+    
+    func leaveMeeting(meetingId: UUID) async throws {
+        guard let userId = currentUser?.id else {
+            throw APIError.notAuthenticated
+        }
+        
+        let deleteEndpoint = "meeting_participants?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
+        let _: String = try await makeRequest(
+            endpoint: deleteEndpoint,
+            method: "DELETE"
+        )
+        
+        // 로컬 상태 업데이트
+        await MainActor.run {
+            participatingMeetings.removeAll { $0.id == meetingId }
+        }
+    }
+    
+    func loadUserMeetings() async {
+        // Mock implementation - 실제로는 API에서 사용자의 참여/호스팅 모임을 가져옴
+        await MainActor.run {
+            // 예시: 참여 중인 모임 1개
+            if !participatingMeetings.isEmpty {
+                return // 이미 로드됨
+            }
+            
+            // Mock 참여 모임 추가 (테스트용)
+            if Bool.random() {
+                participatingMeetings = [
+                    Meeting(
+                        id: UUID(),
+                        hostId: UUID(),
+                        hostNickname: "다른사람",
+                        date: Date().addingTimeInterval(3600),
+                        time: Date(),
+                        week: getCurrentWeek(),
+                        type: .roulette,
+                        status: .recruiting,
+                        selectedRestaurantId: nil,
+                        selectedRestaurantName: nil,
+                        rouletteResult: nil,
+                        rouletteSpunAt: nil,
+                        rouletteSpunBy: nil,
+                        createdAt: Date(),
+                        participantCount: 2,
+                        voteCount: 1
+                    )
+                ]
+            }
+        }
+    }
+    
+    private func getCurrentWeek() -> Int {
+        let calendar = Calendar.current
+        return calendar.component(.weekOfYear, from: Date())
     }
     
     // MARK: - Voting
@@ -295,6 +387,8 @@ enum APIError: LocalizedError {
     case serverError
     case notAuthenticated
     case decodingError
+    case alreadyParticipating
+    case cannotCreateMeeting
     
     var errorDescription: String? {
         switch self {
@@ -306,6 +400,10 @@ enum APIError: LocalizedError {
             return "로그인이 필요합니다."
         case .decodingError:
             return "데이터 처리 중 오류가 발생했습니다."
+        case .alreadyParticipating:
+            return "이미 다른 모임에 참여 중입니다."
+        case .cannotCreateMeeting:
+            return "참여 중이거나 호스팅 중인 모임이 있어 새 모임을 만들 수 없습니다."
         }
     }
 }

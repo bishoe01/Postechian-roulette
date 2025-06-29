@@ -16,7 +16,7 @@ struct User: Codable, Identifiable {
 }
 
 // MARK: - Restaurant
-struct Restaurant: Codable, Identifiable, Equatable {
+struct Restaurant: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let name: String
     let category: String?
