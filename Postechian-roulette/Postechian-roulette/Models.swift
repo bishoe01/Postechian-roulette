@@ -71,8 +71,8 @@ struct Meeting: Codable, Identifiable {
     let id: UUID
     let hostId: UUID
     var hostNickname: String?
-    let date: Date
-    let time: Date
+    let dateString: String  // "2025-06-29" 형태
+    let timeString: String  // "18:19:01" 형태
     let week: Int
     let type: MeetingType
     let status: MeetingStatus
@@ -85,12 +85,25 @@ struct Meeting: Codable, Identifiable {
     var participantCount: Int?
     var voteCount: Int?
     
+    // Computed properties for Date objects
+    var date: Date {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString) ?? Date()
+    }
+    
+    var time: Date {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.date(from: timeString) ?? Date()
+    }
+    
     enum CodingKeys: String, CodingKey {
         case id
         case hostId = "host_id"
         case hostNickname = "host_nickname"
-        case date
-        case time
+        case dateString = "date"
+        case timeString = "time"
         case week
         case type
         case status

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     var body: some View {
         Group {
@@ -40,7 +40,7 @@ struct MainTabView: View {
 }
 
 struct LoginView: View {
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     @State private var nickname = ""
     @State private var password = ""
     @State private var selectedIcon = AppConfig.profileIcons.first ?? "👤"
@@ -124,7 +124,7 @@ struct LoginView: View {
 
 struct SignUpView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     @State private var nickname = ""
     @State private var password = ""
     @State private var selectedIcon = AppConfig.profileIcons.first ?? "👤"
@@ -204,7 +204,7 @@ struct SignUpView: View {
 }
 
 struct MeetingListView: View {
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     @State private var selectedTab = 0
     @State private var fixedMeetings: [Meeting] = []
     @State private var rouletteMeetings: [Meeting] = []
@@ -286,8 +286,8 @@ struct MeetingListView: View {
                 id: UUID(),
                 hostId: UUID(),
                 hostNickname: "김철수",
-                date: Date(),
-                time: Date(),
+                dateString: "2025-06-29",
+                timeString: "18:00:00",
                 week: getCurrentWeek(),
                 type: .fixed,
                 status: .recruiting,
@@ -307,8 +307,8 @@ struct MeetingListView: View {
                 id: UUID(),
                 hostId: UUID(),
                 hostNickname: "이영희",
-                date: Date().addingTimeInterval(3600),
-                time: Date(),
+                dateString: "2025-06-30",
+                timeString: "19:00:00",
                 week: getCurrentWeek(),
                 type: .roulette,
                 status: .recruiting,
@@ -323,10 +323,59 @@ struct MeetingListView: View {
             )
         ]
         
-        await MainActor.run {
-            self.fixedMeetings = mockFixedMeetings
-            self.rouletteMeetings = mockRouletteMeetings
-            self.isLoading = false
+        do {
+            // 실제 Supabase에서 모임 목록 가져오기
+            let currentWeek = getCurrentWeek()
+            let endpoint = "meetings?week=eq.\(currentWeek)&status=eq.recruiting&order=created_at.desc"
+            
+            print("DEBUG: loadMeetings - endpoint: \(endpoint)")
+            
+            var allMeetings: [Meeting] = try await supabase.makePublicRequest(endpoint: endpoint)
+            
+            print("DEBUG: loadMeetings - loaded \(allMeetings.count) meetings")
+            
+            // 각 모임의 호스트 닉네임과 선택된 음식점 이름을 별도로 가져오기
+            for i in 0..<allMeetings.count {
+                // 호스트 닉네임 가져오기
+                let userEndpoint = "users?id=eq.\(allMeetings[i].hostId.uuidString)&select=nickname"
+                do {
+                    let users: [User] = try await supabase.makePublicRequest(endpoint: userEndpoint)
+                    if let hostNickname = users.first?.nickname {
+                        allMeetings[i].hostNickname = hostNickname
+                    }
+                } catch {
+                    print("DEBUG: Failed to load host nickname for meeting \(allMeetings[i].id): \(error)")
+                    allMeetings[i].hostNickname = "알 수 없음"
+                }
+                
+                // 선택된 음식점 이름 가져오기 (fixed 타입일 경우)
+                if let restaurantId = allMeetings[i].selectedRestaurantId {
+                    let restaurantEndpoint = "restaurants?id=eq.\(restaurantId.uuidString)&select=name"
+                    do {
+                        let restaurants: [Restaurant] = try await supabase.makePublicRequest(endpoint: restaurantEndpoint)
+                        if let restaurantName = restaurants.first?.name {
+                            allMeetings[i].selectedRestaurantName = restaurantName
+                        }
+                    } catch {
+                        print("DEBUG: Failed to load restaurant name for meeting \(allMeetings[i].id): \(error)")
+                        allMeetings[i].selectedRestaurantName = "음식점 정보 없음"
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                self.fixedMeetings = allMeetings.filter { $0.type == .fixed }
+                self.rouletteMeetings = allMeetings.filter { $0.type == .roulette }
+                self.isLoading = false
+            }
+        } catch {
+            print("DEBUG: Failed to load meetings: \(error)")
+            // Fallback to mock data
+            await MainActor.run {
+                self.fixedMeetings = mockFixedMeetings
+                self.rouletteMeetings = mockRouletteMeetings
+                self.isLoading = false
+            }
         }
     }
     
@@ -545,7 +594,7 @@ struct StatusBadge: View {
 }
 
 struct RestaurantListView: View {
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     @State private var restaurants: [Restaurant] = []
     @State private var isLoading = true
     
@@ -588,7 +637,7 @@ struct RestaurantListView: View {
     
     private func loadRestaurants() async {
         do {
-            let fetchedRestaurants = try await supabase.loadSampleData()
+            let fetchedRestaurants = try await supabase.fetchRestaurants()
             await MainActor.run {
                 self.restaurants = fetchedRestaurants
                 self.isLoading = false
@@ -602,7 +651,7 @@ struct RestaurantListView: View {
 }
 
 struct ProfileView: View {
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     @State private var showingSignOutAlert = false
     @State private var showingPreferences = false
     @State private var showingHistory = false

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     @State private var restaurants: [Restaurant] = []
     @State private var preferences: [UUID: Float] = [:]
@@ -151,7 +151,7 @@ struct PreferencesView: View {
     
     private func loadData() async {
         do {
-            let fetchedRestaurants = try await supabase.loadSampleData()
+            let fetchedRestaurants = try await supabase.fetchRestaurants()
             await MainActor.run {
                 self.restaurants = fetchedRestaurants
                 self.isLoading = false

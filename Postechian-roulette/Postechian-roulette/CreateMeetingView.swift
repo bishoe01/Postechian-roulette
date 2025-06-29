@@ -2,7 +2,7 @@ import SwiftUI
 
 struct CreateMeetingView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     @State private var selectedType: MeetingType = .fixed
     @State private var selectedDate = Date()
@@ -299,7 +299,7 @@ struct CreateMeetingView: View {
     
     private func loadRestaurants() async {
         do {
-            let fetchedRestaurants = try await supabase.loadSampleData()
+            let fetchedRestaurants = try await supabase.fetchRestaurants()
             await MainActor.run {
                 self.restaurants = fetchedRestaurants
             }
@@ -325,8 +325,20 @@ struct CreateMeetingView: View {
                 let calendar = Calendar.current
                 let week = calendar.component(.weekOfYear, from: selectedDate)
                 
-                // For now, just simulate success
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                // Create meeting using Supabase
+                let _ = try await supabase.createMeeting(
+                    date: selectedDate,
+                    time: selectedTime,
+                    week: week,
+                    type: selectedType,
+                    selectedRestaurantId: selectedType == .fixed ? selectedRestaurant?.id : nil
+                )
+                
+                // Add candidates for roulette meetings
+                if selectedType == .roulette && !selectedCandidates.isEmpty {
+                    // TODO: Add candidates to meeting_candidates table
+                    // This would need a new API call
+                }
                 
                 await MainActor.run {
                     dismiss()

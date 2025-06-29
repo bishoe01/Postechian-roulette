@@ -3,7 +3,7 @@ import SwiftUI
 struct MeetingDetailView: View {
     let meeting: Meeting
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     @State private var isParticipating = false
     @State private var selectedRestaurant: UUID?
@@ -11,6 +11,9 @@ struct MeetingDetailView: View {
     @State private var errorMessage = ""
     @State private var showRouletteResult = false
     @State private var rouletteWinner: String?
+    @State private var candidates: [Restaurant] = []
+    @State private var selectedVote: UUID?
+    @State private var showHostOptions = false
     
     var isHost: Bool {
         supabase.currentUser?.id == meeting.hostId
@@ -66,6 +69,9 @@ struct MeetingDetailView: View {
         }
         .task {
             await loadParticipationStatus()
+            if meeting.type == .roulette {
+                await loadCandidates()
+            }
         }
         .alert("룰렛 결과", isPresented: $showRouletteResult) {
             Button("확인") { }
@@ -73,6 +79,14 @@ struct MeetingDetailView: View {
             if let winner = rouletteWinner {
                 Text("당첨된 음식점: \(winner)")
             }
+        }
+        .confirmationDialog("모임 파토내기", isPresented: $showHostOptions) {
+            Button("모임 삭제하기", role: .destructive) {
+                deleteMeeting()
+            }
+            Button("취소", role: .cancel) { }
+        } message: {
+            Text("정말로 모임을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")
         }
     }
     
@@ -222,14 +236,13 @@ struct MeetingDetailView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
-                    // Mock voting options - in real app, load from meeting candidates
                     LazyVStack(spacing: 8) {
-                        ForEach(["순이", "맘스터치", "상해교자"], id: \.self) { restaurant in
+                        ForEach(candidates) { restaurant in
                             VotingOptionRow(
-                                restaurantName: restaurant,
-                                isSelected: false
+                                restaurantName: restaurant.name,
+                                isSelected: selectedVote == restaurant.id
                             ) {
-                                // Vote for restaurant
+                                voteForRestaurant(restaurant.id)
                             }
                         }
                     }
@@ -292,7 +305,24 @@ struct MeetingDetailView: View {
     
     private var actionButtons: some View {
         VStack(spacing: 12) {
-            if canJoin {
+            if isHost {
+                // 호스트인 경우 - 파토내기 버튼
+                Button {
+                    showHostOptions = true
+                } label: {
+                    HStack {
+                        Image(systemName: "xmark.circle.fill")
+                        Text("파토내기")
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(.red)
+                    .cornerRadius(12)
+                }
+            } else if canJoin {
+                // 참여 가능한 경우 - 참여하기 버튼
                 Button {
                     joinMeeting()
                 } label: {
@@ -303,7 +333,7 @@ struct MeetingDetailView: View {
                                 .tint(.white)
                         } else {
                             Image(systemName: "person.badge.plus")
-                            Text("모임 참여하기")
+                            Text("참여하기")
                         }
                     }
                     .fontWeight(.semibold)
@@ -315,6 +345,7 @@ struct MeetingDetailView: View {
                 }
                 .disabled(isLoading)
             } else if isParticipating {
+                // 이미 참여한 경우 - 참여 취소 버튼
                 Button {
                     leaveMeeting()
                 } label: {
@@ -343,6 +374,10 @@ struct MeetingDetailView: View {
     private func joinMeeting() {
         isLoading = true
         errorMessage = ""
+        
+        print("DEBUG: MeetingDetail - joinMeeting called")
+        print("DEBUG: MeetingDetail - supabase.currentUser = \(String(describing: supabase.currentUser))")
+        print("DEBUG: MeetingDetail - supabase.isAuthenticated = \(supabase.isAuthenticated)")
         
         Task {
             do {
@@ -386,6 +421,55 @@ struct MeetingDetailView: View {
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func loadCandidates() async {
+        do {
+            let fetchedCandidates = try await supabase.getMeetingCandidates(meetingId: meeting.id)
+            await MainActor.run {
+                self.candidates = fetchedCandidates
+                self.selectedVote = supabase.getUserVote(meetingId: meeting.id)
+            }
+        } catch {
+            print("Failed to load candidates: \(error)")
+        }
+    }
+    
+    private func voteForRestaurant(_ restaurantId: UUID) {
+        Task {
+            do {
+                try await supabase.vote(meetingId: meeting.id, restaurantId: restaurantId)
+                await MainActor.run {
+                    selectedVote = restaurantId
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+    
+    private func deleteMeeting() {
+        Task {
+            do {
+                print("DEBUG: MeetingDetail - deleteMeeting called for meetingId: \(meeting.id)")
+                print("DEBUG: MeetingDetail - currentUser: \(String(describing: supabase.currentUser?.id))")
+                print("DEBUG: MeetingDetail - isHost: \(isHost)")
+                
+                try await supabase.deleteMeeting(meetingId: meeting.id)
+                
+                print("DEBUG: MeetingDetail - deleteMeeting successful")
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                print("DEBUG: MeetingDetail - deleteMeeting failed: \(error)")
+                await MainActor.run {
+                    errorMessage = "모임 삭제 실패: \(error.localizedDescription)"
                 }
             }
         }
@@ -453,8 +537,8 @@ struct VotingOptionRow: View {
             id: UUID(),
             hostId: UUID(),
             hostNickname: "김철수",
-            date: Date(),
-            time: Date(),
+            dateString: "2025-06-29",
+            timeString: "18:00:00",
             week: 25,
             type: .roulette,
             status: .recruiting,

@@ -1,10 +1,16 @@
 import Foundation
 
+// MARK: - Helper Types
+struct EmptyResponse: Codable {}
+
 class SupabaseService: ObservableObject {
     static let shared = SupabaseService()
     
     private let baseURL = "https://ywuojdghqyozoiaaglbn.supabase.co"
-    private let apiKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3dW9qZGdocXlvem9pYWFnbGJuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzUzOTI4NzQsImV4cCI6MjA1MDk2ODg3NH0.QfbR_ELGLxJy0JRJ4DQYgNVSTxGNT-FDXFiLZT4nS4g"
+    private let apiKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl3dW9qZGdocXlvem9pYWFnbGJuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTExNzU0ODIsImV4cCI6MjA2Njc1MTQ4Mn0.IMP129nurHwvG2ieJxSNvb5SwBWlenHCLnUKzz6jdGk"
+    
+    // Mock 모드 플래그 - 실제 DB 준비되면 false로 변경
+    private let useMockData = false
     
     @Published var currentUser: User?
     @Published var isAuthenticated = false
@@ -39,40 +45,92 @@ class SupabaseService: ObservableObject {
         ]
     }
     
-    // MARK: - Auth (Simple Mock for MVP)
+    // MARK: - Auth
     func signUp(nickname: String, password: String, profileIcon: String) async throws {
-        // For MVP, create a mock user
-        let mockUser = User(
-            id: UUID(),
-            nickname: nickname,
-            profileIcon: profileIcon,
-            createdAt: Date()
-        )
-        
-        // Simulate API delay
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        
-        await MainActor.run {
-            self.currentUser = mockUser
-            self.isAuthenticated = true
+        if useMockData {
+            // Mock implementation
+            let mockUser = User(
+                id: UUID(),
+                nickname: nickname,
+                profileIcon: profileIcon,
+                createdAt: Date()
+            )
+            
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            
+            await MainActor.run {
+                self.currentUser = mockUser
+                self.isAuthenticated = true
+            }
+        } else {
+            let userPayload = [
+                "nickname": nickname,
+                "password_hash": password,
+                "profile_icon": profileIcon
+            ]
+            
+            let data = try JSONSerialization.data(withJSONObject: userPayload)
+            let users: [User] = try await makeRequest(
+                endpoint: "users",
+                method: "POST",
+                body: data
+            )
+            
+            if let user = users.first {
+                await MainActor.run {
+                    self.currentUser = user
+                    self.isAuthenticated = true
+                }
+            }
         }
     }
     
     func signIn(nickname: String, password: String) async throws {
-        // For MVP, create a mock user
-        let mockUser = User(
-            id: UUID(),
-            nickname: nickname,
-            profileIcon: AppConfig.profileIcons.randomElement(),
-            createdAt: Date()
-        )
-        
-        // Simulate API delay
-        try await Task.sleep(nanoseconds: 1_000_000_000)
-        
-        await MainActor.run {
-            self.currentUser = mockUser
-            self.isAuthenticated = true
+        if useMockData {
+            // Mock implementation
+            let mockUser = User(
+                id: UUID(),
+                nickname: nickname,
+                profileIcon: AppConfig.profileIcons.randomElement(),
+                createdAt: Date()
+            )
+            
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            
+            await MainActor.run {
+                self.currentUser = mockUser
+                self.isAuthenticated = true
+            }
+            
+            await loadUserMeetings()
+        } else {
+            // Supabase API를 통한 인증
+            do {
+                print("DEBUG: Attempting login for nickname: \(nickname)")
+                let users: [User] = try await makeRequest(
+                    endpoint: "users?nickname=eq.\(nickname)&password_hash=eq.\(password)&select=*"
+                )
+                
+                print("DEBUG: Found \(users.count) users with matching credentials")
+                
+                if let user = users.first {
+                    print("DEBUG: Authentication successful for user: \(user.nickname)")
+                    
+                    await MainActor.run {
+                        self.currentUser = user
+                        self.isAuthenticated = true
+                    }
+                    
+                    // 로그인 후 참여 중인 모임 로드
+                    await loadUserMeetings()
+                } else {
+                    print("DEBUG: Authentication failed - invalid nickname or password")
+                    throw APIError.invalidCredentials
+                }
+            } catch {
+                print("DEBUG: Login error: \(error)")
+                throw error
+            }
         }
     }
     
@@ -107,25 +165,61 @@ class SupabaseService: ObservableObject {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse,
-              200...299 ~= httpResponse.statusCode else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        
+        // Handle different status codes
+        switch httpResponse.statusCode {
+        case 200...299:
+            break // Success
+        case 401:
+            throw APIError.notAuthenticated
+        case 403:
+            throw APIError.notAuthorized
+        case 409:
+            throw APIError.alreadyParticipating
+        default:
+            print("Server error: \(httpResponse.statusCode)")
+            if let errorData = String(data: data, encoding: .utf8) {
+                print("Error response: \(errorData)")
+            }
             throw APIError.serverError
         }
         
         // Handle empty responses for DELETE requests
         if method == "DELETE" && data.isEmpty {
-            return "" as! T
+            // DELETE 요청의 경우 빈 응답을 EmptyResponse로 처리
+            return EmptyResponse() as! T
+        }
+        
+        // Handle empty responses for other methods
+        if data.isEmpty {
+            return EmptyResponse() as! T
         }
         
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         
-        return try decoder.decode(T.self, from: data)
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            print("DEBUG: JSON decoding failed: \(error)")
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("DEBUG: Response data: \(jsonString)")
+            }
+            throw APIError.decodingError
+        }
     }
     
     // MARK: - Restaurants
     func fetchRestaurants() async throws -> [Restaurant] {
         return try await makeRequest(endpoint: "restaurants?select=*")
+    }
+    
+    // MARK: - Public API Helper
+    func makePublicRequest<T: Codable>(endpoint: String, method: String = "GET", body: Data? = nil) async throws -> T {
+        return try await makeRequest(endpoint: endpoint, method: method, body: body)
     }
     
     func createRestaurant(name: String, category: String?, description: String?, mapUrl: String?) async throws {
@@ -191,11 +285,15 @@ class SupabaseService: ObservableObject {
         ] as [String: Any?]
         
         let data = try JSONSerialization.data(withJSONObject: meeting.compactMapValues { $0 })
+        
         let result: [Meeting] = try await makeRequest(
             endpoint: "meetings",
             method: "POST",
             body: data
         )
+        
+        // 모임 목록 새로고침
+        await loadUserMeetings()
         
         return result.first!
     }
@@ -237,35 +335,106 @@ class SupabaseService: ObservableObject {
             throw APIError.notAuthenticated
         }
         
-        let deleteEndpoint = "meeting_participants?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
-        let _: String = try await makeRequest(
-            endpoint: deleteEndpoint,
-            method: "DELETE"
-        )
+        if useMockData {
+            // Mock implementation
+            try await Task.sleep(nanoseconds: 500_000_000)
+            
+            await MainActor.run {
+                participatingMeetings.removeAll { $0.id == meetingId }
+            }
+        } else {
+            let deleteEndpoint = "meeting_participants?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
+            let _: String = try await makeRequest(
+                endpoint: deleteEndpoint,
+                method: "DELETE"
+            )
+            
+            // 로컬 상태 업데이트
+            await MainActor.run {
+                participatingMeetings.removeAll { $0.id == meetingId }
+            }
+        }
+    }
+    
+    func deleteMeeting(meetingId: UUID) async throws {
+        guard let userId = currentUser?.id else {
+            throw APIError.notAuthenticated
+        }
         
-        // 로컬 상태 업데이트
+        if useMockData {
+            // Mock implementation
+            try await Task.sleep(nanoseconds: 500_000_000)
+            
+            await MainActor.run {
+                hostedMeetings.removeAll { $0.id == meetingId }
+            }
+        } else {
+            print("DEBUG: deleteMeeting - meetingId: \(meetingId), userId: \(userId)")
+            
+            // 모임 삭제 (CASCADE로 관련 데이터도 모두 삭제됨)
+            let deleteEndpoint = "meetings?id=eq.\(meetingId.uuidString)&host_id=eq.\(userId.uuidString)"
+            
+            print("DEBUG: deleteMeeting - deleteEndpoint: \(deleteEndpoint)")
+            
+            // DELETE 요청은 빈 응답을 반환할 수 있으므로 EmptyResponse 사용
+            do {
+                let _: EmptyResponse = try await makeRequest(
+                    endpoint: deleteEndpoint,
+                    method: "DELETE"
+                )
+                print("DEBUG: deleteMeeting - API call successful")
+            } catch {
+                print("DEBUG: deleteMeeting - API call failed: \(error)")
+                throw error
+            }
+            
+            await MainActor.run {
+                hostedMeetings.removeAll { $0.id == meetingId }
+                participatingMeetings.removeAll { $0.id == meetingId }
+            }
+        }
+    }
+    
+    func transferHost(meetingId: UUID, newHostId: UUID) async throws {
+        guard let userId = currentUser?.id else {
+            throw APIError.notAuthenticated
+        }
+        
+        // 호스트인지 확인
+        guard hostedMeetings.contains(where: { $0.id == meetingId && $0.hostId == userId }) else {
+            throw APIError.notAuthorized
+        }
+        
+        // Mock implementation
+        try await Task.sleep(nanoseconds: 500_000_000)
+        
         await MainActor.run {
-            participatingMeetings.removeAll { $0.id == meetingId }
+            // 호스팅 목록에서 제거
+            hostedMeetings.removeAll { $0.id == meetingId }
+            // TODO: 실제로는 서버에서 호스트 변경 API 호출 필요
         }
     }
     
     func loadUserMeetings() async {
-        // Mock implementation - 실제로는 API에서 사용자의 참여/호스팅 모임을 가져옴
-        await MainActor.run {
-            // 예시: 참여 중인 모임 1개
-            if !participatingMeetings.isEmpty {
-                return // 이미 로드됨
-            }
-            
-            // Mock 참여 모임 추가 (테스트용)
-            if Bool.random() {
-                participatingMeetings = [
-                    Meeting(
-                        id: UUID(),
+        guard let userId = currentUser?.id else { return }
+        
+        if useMockData {
+            // Mock implementation
+            await MainActor.run {
+                // 처음 로드시에만 Mock 데이터 생성
+                if participatingMeetings.isEmpty && hostedMeetings.isEmpty && Bool.random() {
+                    let mockMeetingId = UUID()
+                    let dateFormatter = DateFormatter()
+                    dateFormatter.dateFormat = "yyyy-MM-dd"
+                    let timeFormatter = DateFormatter()
+                    timeFormatter.dateFormat = "HH:mm:ss"
+                    
+                    let mockMeeting = Meeting(
+                        id: mockMeetingId,
                         hostId: UUID(),
                         hostNickname: "다른사람",
-                        date: Date().addingTimeInterval(3600),
-                        time: Date(),
+                        dateString: dateFormatter.string(from: Date().addingTimeInterval(3600)),
+                        timeString: timeFormatter.string(from: Date()),
                         week: getCurrentWeek(),
                         type: .roulette,
                         status: .recruiting,
@@ -278,10 +447,53 @@ class SupabaseService: ObservableObject {
                         participantCount: 2,
                         voteCount: 1
                     )
-                ]
+                    
+                    // Mock 투표 후보들 저장 (투표 기능을 위해)
+                    mockMeetingCandidates[mockMeetingId] = [
+                        Restaurant(id: UUID(), name: "순이", category: "면류", description: nil, mapUrl: nil, createdAt: Date()),
+                        Restaurant(id: UUID(), name: "맘스터치", category: "햄버거", description: nil, mapUrl: nil, createdAt: Date()),
+                        Restaurant(id: UUID(), name: "상해교자", category: "중식", description: nil, mapUrl: nil, createdAt: Date())
+                    ]
+                    
+                    participatingMeetings = [mockMeeting]
+                }
+            }
+        } else {
+            do {
+                // 참여 중인 모임 ID들 가져오기
+                struct ParticipantRecord: Codable {
+                    let meeting_id: UUID
+                    let user_id: UUID
+                }
+                
+                let participantEndpoint = "meeting_participants?user_id=eq.\(userId.uuidString)&select=meeting_id"
+                let participantRecords: [ParticipantRecord] = try await makeRequest(endpoint: participantEndpoint)
+                
+                // 참여 중인 모임들의 상세 정보 가져오기 (기본 필드만 선택)
+                var participatingMeetingsData: [Meeting] = []
+                if !participantRecords.isEmpty {
+                    let meetingIds = participantRecords.map { $0.meeting_id.uuidString }.joined(separator: ",")
+                    let participatingEndpoint = "meetings?id=in.(\(meetingIds))&select=id,host_id,date,time,week,type,status,selected_restaurant_id,roulette_result,roulette_spun_at,roulette_spun_by,created_at"
+                    participatingMeetingsData = try await makeRequest(endpoint: participatingEndpoint)
+                }
+                
+                // 호스팅 중인 모임 가져오기 (기본 필드만 선택)
+                let hostEndpoint = "meetings?host_id=eq.\(userId.uuidString)&status=eq.recruiting&select=id,host_id,date,time,week,type,status,selected_restaurant_id,roulette_result,roulette_spun_at,roulette_spun_by,created_at"
+                let hostedData: [Meeting] = try await makeRequest(endpoint: hostEndpoint)
+                
+                await MainActor.run {
+                    self.participatingMeetings = participatingMeetingsData
+                    self.hostedMeetings = hostedData
+                }
+            } catch {
+                print("Failed to load user meetings: \(error)")
             }
         }
     }
+    
+    // Mock 투표 후보 저장소
+    private var mockMeetingCandidates: [UUID: [Restaurant]] = [:]
+    private var mockUserVotes: [UUID: UUID] = [:] // meetingId: restaurantId
     
     private func getCurrentWeek() -> Int {
         let calendar = Calendar.current
@@ -294,31 +506,60 @@ class SupabaseService: ObservableObject {
             throw APIError.notAuthenticated
         }
         
-        // First delete existing vote
-        let deleteEndpoint = "meeting_votes?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
-        let _: String = try await makeRequest(
-            endpoint: deleteEndpoint,
-            method: "DELETE"
-        )
-        
-        // Then insert new vote
-        let vote = [
-            "meeting_id": meetingId.uuidString,
-            "user_id": userId.uuidString,
-            "restaurant_id": restaurantId.uuidString
-        ]
-        
-        let data = try JSONSerialization.data(withJSONObject: vote)
-        let _: String = try await makeRequest(
-            endpoint: "meeting_votes",
-            method: "POST",
-            body: data
-        )
+        if useMockData {
+            // Mock implementation
+            try await Task.sleep(nanoseconds: 300_000_000)
+            
+            await MainActor.run {
+                mockUserVotes[meetingId] = restaurantId
+            }
+        } else {
+            // 기존 투표 삭제
+            let deleteEndpoint = "meeting_votes?meeting_id=eq.\(meetingId.uuidString)&user_id=eq.\(userId.uuidString)"
+            let _: String = try await makeRequest(
+                endpoint: deleteEndpoint,
+                method: "DELETE"
+            )
+            
+            // 새 투표 추가
+            let vote = [
+                "meeting_id": meetingId.uuidString,
+                "user_id": userId.uuidString,
+                "restaurant_id": restaurantId.uuidString
+            ]
+            
+            let data = try JSONSerialization.data(withJSONObject: vote)
+            let _: String = try await makeRequest(
+                endpoint: "meeting_votes",
+                method: "POST",
+                body: data
+            )
+            
+            await MainActor.run {
+                mockUserVotes[meetingId] = restaurantId
+            }
+        }
+    }
+    
+    func getMeetingCandidates(meetingId: UUID) async throws -> [Restaurant] {
+        if useMockData {
+            // Mock implementation
+            return mockMeetingCandidates[meetingId] ?? []
+        } else {
+            // 실제 API 호출시에는 복잡한 JSON 파싱 필요
+            // 지금은 빈 배열 반환
+            return []
+        }
+    }
+    
+    func getUserVote(meetingId: UUID) -> UUID? {
+        // 로컬 캐시 반환 (실제로는 API 호출 필요)
+        return mockUserVotes[meetingId]
     }
     
     // MARK: - Roulette
     func spinRoulette(meetingId: UUID) async throws -> UUID {
-        guard let userId = currentUser?.id else {
+        guard currentUser?.id != nil else {
             throw APIError.notAuthenticated
         }
         
@@ -386,9 +627,11 @@ enum APIError: LocalizedError {
     case invalidURL
     case serverError
     case notAuthenticated
+    case invalidCredentials
     case decodingError
     case alreadyParticipating
     case cannotCreateMeeting
+    case notAuthorized
     
     var errorDescription: String? {
         switch self {
@@ -398,12 +641,16 @@ enum APIError: LocalizedError {
             return "서버 오류가 발생했습니다."
         case .notAuthenticated:
             return "로그인이 필요합니다."
+        case .invalidCredentials:
+            return "아이디 또는 비밀번호가 올바르지 않습니다."
         case .decodingError:
             return "데이터 처리 중 오류가 발생했습니다."
         case .alreadyParticipating:
             return "이미 다른 모임에 참여 중입니다."
         case .cannotCreateMeeting:
             return "참여 중이거나 호스팅 중인 모임이 있어 새 모임을 만들 수 없습니다."
+        case .notAuthorized:
+            return "권한이 없습니다."
         }
     }
 }

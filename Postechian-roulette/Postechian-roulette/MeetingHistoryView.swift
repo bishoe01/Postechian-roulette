@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MeetingHistoryView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     @State private var historyMeetings: [Meeting] = []
     @State private var selectedFilter = "전체"
@@ -116,8 +116,8 @@ struct MeetingHistoryView: View {
                 id: UUID(),
                 hostId: UUID(),
                 hostNickname: "김철수",
-                date: Date().addingTimeInterval(-86400 * 7), // 1주 전
-                time: Date(),
+                dateString: "2025-06-22", // 1주 전
+                timeString: "18:00:00",
                 week: 25,
                 type: .fixed,
                 status: .completed,
@@ -134,8 +134,8 @@ struct MeetingHistoryView: View {
                 id: UUID(),
                 hostId: supabase.currentUser?.id ?? UUID(),
                 hostNickname: supabase.currentUser?.nickname ?? "나",
-                date: Date().addingTimeInterval(-86400 * 14), // 2주 전
-                time: Date(),
+                dateString: "2025-06-15", // 2주 전
+                timeString: "18:00:00",
                 week: 24,
                 type: .roulette,
                 status: .completed,
@@ -152,8 +152,8 @@ struct MeetingHistoryView: View {
                 id: UUID(),
                 hostId: UUID(),
                 hostNickname: "이영희",
-                date: Date().addingTimeInterval(-86400 * 21), // 3주 전
-                time: Date(),
+                dateString: "2025-06-08", // 3주 전
+                timeString: "18:00:00",
                 week: 23,
                 type: .fixed,
                 status: .closed,
@@ -203,7 +203,7 @@ struct FilterChip: View {
 
 struct HistoryMeetingCard: View {
     let meeting: Meeting
-    @StateObject private var supabase = SupabaseService.shared
+    @EnvironmentObject private var supabase: SupabaseService
     
     private var isHost: Bool {
         meeting.hostId == supabase.currentUser?.id
